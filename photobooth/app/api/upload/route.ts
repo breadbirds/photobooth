@@ -1,5 +1,6 @@
-import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { put } from "@vercel/blob";
+import { storePhoto } from "@/lib/photo-store";
 
 const JPEG_PREFIX = "data:image/jpeg;base64,";
 
@@ -19,6 +20,17 @@ export async function POST(request: Request) {
 
   if (buffer.length === 0) {
     return new NextResponse(null, { status: 400 });
+  }
+
+  const hasBlobCredentials = Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN || process.env.VERCEL_OIDC_TOKEN,
+  );
+
+  if (!hasBlobCredentials) {
+    const origin = new URL(request.url).origin;
+    const photoId = storePhoto(buffer);
+
+    return NextResponse.json({ url: `${origin}/api/download/${photoId}` });
   }
 
   const blob = await put(`photos/${crypto.randomUUID()}.jpg`, buffer, {

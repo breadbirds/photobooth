@@ -103,6 +103,7 @@ export default function Camera({ onCapture }: CameraProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement>(null);
   const hasCapturedRef = useRef(false);
+  const captureTriggeredRef = useRef(false);
   const holdStartedAtRef = useRef<number | null>(null);
   const stateRef = useRef<ScreenState>("camera");
   const [screenState, setScreenState] = useState<ScreenState>("camera");
@@ -138,6 +139,7 @@ export default function Camera({ onCapture }: CameraProps) {
 
   const startCountdown = useCallback(() => {
     stateRef.current = "countdown";
+    captureTriggeredRef.current = false;
     setScreenState("countdown");
     setCountdown(COUNTDOWN_START);
     setMessage("Get ready");
@@ -160,9 +162,7 @@ export default function Camera({ onCapture }: CameraProps) {
       setCountdown((current) => {
         if (current <= 1) {
           window.clearInterval(interval);
-          stateRef.current = "camera";
           setMessage("Capture complete");
-          capture();
           return 0;
         }
 
@@ -174,6 +174,16 @@ export default function Camera({ onCapture }: CameraProps) {
       window.clearInterval(interval);
     };
   }, [capture, screenState]);
+
+  useEffect(() => {
+    if (screenState !== "countdown" || countdown !== 0 || captureTriggeredRef.current) {
+      return;
+    }
+
+    captureTriggeredRef.current = true;
+    stateRef.current = "camera";
+    capture();
+  }, [capture, countdown, screenState]);
 
   useEffect(() => {
     let active = true;

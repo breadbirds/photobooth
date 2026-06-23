@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
-import { put } from "@vercel/blob";
-import { storePhoto } from "@/lib/photo-store";
+import { createClient } from "redis";
 
 const JPEG_PREFIX = "data:image/jpeg;base64,";
 
 type UploadRequest = {
   image?: unknown;
 };
+
+let redisClient: ReturnType<typeof createClient> | null = null;
+
+async function getRedisClient() {
+  if (!redisClient) {
+    redisClient = createClient({ url: process.env.REDIS_URL });
+    redisClient.on("error", (err) => console.error("Redis error:", err));
+    await redisClient.connect();
+  }
+  return redisClient;
+}
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as UploadRequest | null;
@@ -22,21 +32,24 @@ export async function POST(request: Request) {
     return new NextResponse(null, { status: 400 });
   }
 
-  const hasBlobCredentials = Boolean(
-    process.env.BLOB_READ_WRITE_TOKEN || process.env.VERCEL_OIDC_TOKEN,
-  );
+  const photoId = crypto.randomUUID();
+  const photoKey = `photo:${photoId}`;
 
-  if (!hasBlobCredentials) {
-    const origin = new URL(request.url).origin;
-    const photoId = storePhoto(buffer);
-
-    return NextResponse.json({ url: `${origin}/api/download/${photoId}` });
+  try {
+    const redis = await getRedisClient();
+    await redis.setEx(
+      photoKey,
+      30, // TTL: 30 seconds
+      JSON.stringify({
+        image: `data:image/jpeg;base64,${base64}`,
+        contentType: "image/jpeg",
+      })
+    );
+  } catch (error) {
+    console.error("Failed to store photo in Redis:", error);
+    return new NextResponse(null, { status: 500 });
   }
 
-  const blob = await put(`photos/${crypto.randomUUID()}.jpg`, buffer, {
-    access: "public",
-    contentType: "image/jpeg",
-  });
-
-  return NextResponse.json({ url: blob.url });
+  const origin = new URL(request.url).origin;
+  return NextResponse.json({ url: `${origin}/api/download/${photoId}` });
 }

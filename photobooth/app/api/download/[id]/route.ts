@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getPhoto } from "@/lib/photo-store";
+import { createClient } from "redis";
 
 type RouteContext = {
   params: Promise<{
@@ -7,18 +7,53 @@ type RouteContext = {
   }>;
 };
 
+type PhotoData = {
+  image: string;
+  contentType: string;
+};
+
+let redisClient: ReturnType<typeof createClient> | null = null;
+
+async function getRedisClient() {
+  if (!redisClient) {
+    redisClient = createClient({ url: process.env.REDIS_URL });
+    redisClient.on("error", (err) => console.error("Redis error:", err));
+    await redisClient.connect();
+  }
+  return redisClient;
+}
+
 export async function GET(_request: Request, context: RouteContext) {
   const { id } = await context.params;
-  const photo = getPhoto(id);
+  const photoKey = `photo:${id}`;
 
-  if (!photo) {
-    return new NextResponse(null, { status: 404 });
+  try {
+    const redis = await getRedisClient();
+    const photoJson = await redis.get(photoKey);
+
+    if (!photoJson) {
+      return new NextResponse(null, { status: 404 });
+    }
+
+    const photo = JSON.parse(photoJson) as PhotoData;
+
+    // Extract base64 from data URL
+    const base64Match = photo.image.match(/^data:image\/jpeg;base64,(.+)$/);
+    if (!base64Match) {
+      return new NextResponse(null, { status: 400 });
+    }
+
+    const buffer = Buffer.from(base64Match[1], "base64");
+
+    return new NextResponse(new Blob([buffer], { type: photo.contentType }), {
+      headers: {
+        "Content-Type": photo.contentType,
+        "Content-Disposition": `attachment; filename="photobooth-${id}.jpg"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to retrieve photo from Redis:", error);
+    return new NextResponse(null, { status: 500 });
   }
-
-  return new NextResponse(new Blob([photo.buffer.buffer as ArrayBuffer], { type: photo.contentType }), {
-    headers: {
-      "Content-Type": photo.contentType,
-      "Cache-Control": "no-store",
-    },
-  });
 }

@@ -53,7 +53,7 @@ declare global {
 
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
-const HOLD_MS = 800;
+const V_TRIGGER_DELAY_MS = 300;
 const COUNTDOWN_START = 3;
 
 function loadScript(src: string) {
@@ -104,7 +104,8 @@ export default function Camera({ onCapture }: CameraProps) {
   const captureCanvasRef = useRef<HTMLCanvasElement>(null);
   const hasCapturedRef = useRef(false);
   const captureTriggeredRef = useRef(false);
-  const holdStartedAtRef = useRef<number | null>(null);
+  const vTriggerPendingRef = useRef(false);
+  const vTriggerTimeoutRef = useRef<number | null>(null);
   const stateRef = useRef<ScreenState>("camera");
   const [screenState, setScreenState] = useState<ScreenState>("camera");
   const [countdown, setCountdown] = useState(COUNTDOWN_START);
@@ -138,6 +139,13 @@ export default function Camera({ onCapture }: CameraProps) {
   }, [onCapture]);
 
   const startCountdown = useCallback(() => {
+    if (vTriggerTimeoutRef.current) {
+      window.clearTimeout(vTriggerTimeoutRef.current);
+      vTriggerTimeoutRef.current = null;
+    }
+
+    vTriggerPendingRef.current = false;
+
     stateRef.current = "countdown";
     captureTriggeredRef.current = false;
     setScreenState("countdown");
@@ -146,8 +154,14 @@ export default function Camera({ onCapture }: CameraProps) {
   }, []);
 
   const cancelCountdown = useCallback(() => {
+    if (vTriggerTimeoutRef.current) {
+      window.clearTimeout(vTriggerTimeoutRef.current);
+      vTriggerTimeoutRef.current = null;
+    }
+
+    vTriggerPendingRef.current = false;
+
     stateRef.current = "camera";
-    holdStartedAtRef.current = null;
     setScreenState("camera");
     setCountdown(COUNTDOWN_START);
     setMessage("Countdown canceled");
@@ -237,18 +251,23 @@ export default function Camera({ onCapture }: CameraProps) {
       const hasPeaceSign = handsList.some(isPeaceSign);
 
       if (!hasPeaceSign) {
-        holdStartedAtRef.current = null;
-        setMessage("Hold a V sign");
+        if (!vTriggerPendingRef.current) {
+          setMessage("Show a V sign");
+        }
         return;
       }
 
-      const now = performance.now();
-      holdStartedAtRef.current ??= now;
-
-      if (now - holdStartedAtRef.current >= HOLD_MS) {
-        startCountdown();
-      } else {
-        setMessage("Hold a V sign");
+      if (stateRef.current === "camera") {
+        if (!vTriggerPendingRef.current) {
+          vTriggerPendingRef.current = true;
+          setMessage("V detected");
+          vTriggerTimeoutRef.current = window.setTimeout(() => {
+            vTriggerTimeoutRef.current = null;
+            if (stateRef.current === "camera" && vTriggerPendingRef.current) {
+              startCountdown();
+            }
+          }, V_TRIGGER_DELAY_MS);
+        }
       }
     };
 
@@ -296,6 +315,10 @@ export default function Camera({ onCapture }: CameraProps) {
 
     return () => {
       active = false;
+      if (vTriggerTimeoutRef.current) {
+        window.clearTimeout(vTriggerTimeoutRef.current);
+        vTriggerTimeoutRef.current = null;
+      }
       camera?.stop?.();
       hands?.close?.();
     };

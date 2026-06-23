@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="0" y="0" width="512" height="512" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+    <radialGradient id="petal" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 256) rotate(90) scale(170)">
+      <stop stop-color="#FFE7F0"/>
+      <stop offset="1" stop-color="#FFB6D1"/>
+    </radialGradient>
+    <radialGradient id="center" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 256) scale(70)">
+      <stop stop-color="#FFF7C7"/>
+      <stop offset="1" stop-color="#FFCA5F"/>
+    </radialGradient>
+  </defs>
+  <g filter="url(#shadow)">
+    <circle cx="256" cy="120" r="92" fill="url(#petal)"/>
+    <circle cx="378" cy="194" r="92" fill="url(#petal)"/>
+    <circle cx="330" cy="334" r="92" fill="url(#petal)"/>
+    <circle cx="182" cy="334" r="92" fill="url(#petal)"/>
+    <circle cx="134" cy="194" r="92" fill="url(#petal)"/>
+    <circle cx="256" cy="256" r="76" fill="url(#center)"/>
+    <circle cx="256" cy="256" r="34" fill="#FFF0A6"/>
+  </g>
+</svg>

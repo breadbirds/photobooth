@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="0" y="0" width="512" height="512" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+    <linearGradient id="bowGrad" x1="130" y1="128" x2="382" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF9DD5"/>
+      <stop offset="1" stop-color="#FF64B7"/>
+    </linearGradient>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M256 250C256 250 219 128 149 128C100 128 72 164 72 208C72 252 103 298 167 298C210 298 244 277 256 250Z" fill="url(#bowGrad)"/>
+    <path d="M256 250C256 250 293 128 363 128C412 128 440 164 440 208C440 252 409 298 345 298C302 298 268 277 256 250Z" fill="url(#bowGrad)"/>
+    <circle cx="256" cy="250" r="52" fill="#FFEBF6"/>
+    <circle cx="256" cy="250" r="30" fill="#FFFFFF"/>
+    <path d="M234 247L200 328L250 306L256 360L262 306L312 328L278 247" fill="#FF64B7"/>
+  </g>
+</svg>

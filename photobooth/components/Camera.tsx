@@ -1,5 +1,6 @@
 'use client';
 
+import { FilesetResolver, GestureRecognizer, type GestureRecognizerResult, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Countdown from "./Countdown";
@@ -10,53 +11,27 @@ type CameraProps = {
 
 type ScreenState = "camera" | "countdown";
 
-type Landmark = {
-  x: number;
-  y: number;
-};
-
-type HandsResults = {
-  multiHandLandmarks?: Landmark[][];
-};
-
-type HandsInstance = {
-  setOptions: (options: {
-    maxNumHands: number;
-    modelComplexity: number;
-    minDetectionConfidence: number;
-    minTrackingConfidence: number;
-  }) => void;
-  onResults: (callback: (results: HandsResults) => void) => void;
-  send: (input: { image: HTMLVideoElement }) => Promise<void>;
-  close?: () => void;
-};
-
-type HandsConstructor = new (options: {
-  locateFile: (file: string) => string;
-}) => HandsInstance;
-
-type CameraUtilsInstance = {
-  start: () => Promise<void>;
-  stop?: () => void;
-};
-
-type CameraUtilsConstructor = new (
-  video: HTMLVideoElement,
-  options: { onFrame: () => Promise<void>; width: number; height: number },
-) => CameraUtilsInstance;
-
-declare global {
-  interface Window {
-    Hands?: HandsConstructor;
-    Camera?: CameraUtilsConstructor;
-  }
-}
+type Landmark = Pick<NormalizedLandmark, "x" | "y">;
 
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
 const V_TRIGGER_DELAY_MS = 300;
 const COUNTDOWN_START = 3;
 const STICKER_RENDER_SIZE = 96;
+const HEART_BURST_DURATION_MS = 1000;
+const HEART_BURST_INTERVAL_MS = 450;
+const GESTURE_SCORE_THRESHOLD = 0.65;
+const MEDIAPIPE_TASKS_VERSION = "0.10.35";
+const GESTURE_RECOGNIZER_MODEL =
+  "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task";
+const MEDIAPIPE_WASM_PATH = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_TASKS_VERSION}/wasm`;
+const HEART_PARTICLES = [
+  { x: -96, y: -80, size: 42, rotate: -18, delay: 0 },
+  { x: -48, y: -120, size: 34, rotate: 16, delay: 80 },
+  { x: 0, y: -96, size: 54, rotate: -8, delay: 30 },
+  { x: 54, y: -128, size: 38, rotate: 20, delay: 130 },
+  { x: 98, y: -70, size: 32, rotate: -14, delay: 190 },
+] as const;
 
 type Sticker = {
   id: string;
@@ -69,6 +44,13 @@ type StickerInstance = {
   stickerId: string;
   x: number;
   y: number;
+};
+
+type HeartBurst = {
+  id: string;
+  x: number;
+  y: number;
+  startedAt: number;
 };
 
 const STICKERS: Sticker[] = [
@@ -100,46 +82,96 @@ function loadStickerImage(src: string) {
   return promise;
 }
 
-function loadScript(src: string) {
-  return new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
+function hasGesture(results: GestureRecognizerResult, gestureName: string) {
+  return results.gestures.some((handGestures) =>
+    handGestures.some(
+      (gesture) => gesture.categoryName === gestureName && gesture.score >= GESTURE_SCORE_THRESHOLD,
+    ),
+  );
+}
 
-    if (existing?.dataset.loaded === "true") {
-      resolve();
+function ignoreTfliteInfoLog(args: unknown[]) {
+  return args.some(
+    (arg) => typeof arg === "string" && arg.includes("Created TensorFlow Lite XNNPACK delegate for CPU"),
+  );
+}
+
+function recognizeGestureForVideo(gestureRecognizer: GestureRecognizer, video: HTMLVideoElement) {
+  const originalConsoleError = console.error;
+
+  console.error = (...args: unknown[]) => {
+    if (ignoreTfliteInfoLog(args)) {
       return;
     }
 
-    const script = existing ?? document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.onload = () => {
-      script.dataset.loaded = "true";
-      resolve();
-    };
-    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    originalConsoleError(...args);
+  };
 
-    if (!existing) {
-      document.body.appendChild(script);
-    }
+  try {
+    return gestureRecognizer.recognizeForVideo(video, performance.now());
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
+function findHandByGesture(results: GestureRecognizerResult, gestureName: string) {
+  const gestureIndex = results.gestures.findIndex((handGestures) =>
+    handGestures.some(
+      (gesture) => gesture.categoryName === gestureName && gesture.score >= GESTURE_SCORE_THRESHOLD,
+    ),
+  );
+
+  return gestureIndex === -1 ? null : results.landmarks[gestureIndex] ?? null;
+}
+
+function drawHeart(context: CanvasRenderingContext2D, x: number, y: number, size: number, rotate: number, alpha: number) {
+  context.save();
+  context.translate(x, y);
+  context.rotate((rotate * Math.PI) / 180);
+  context.scale(size / 32, size / 32);
+  context.globalAlpha = alpha;
+  context.fillStyle = "#ff4d8d";
+  context.shadowColor = "rgba(244, 63, 94, 0.35)";
+  context.shadowBlur = 18;
+  context.beginPath();
+  context.moveTo(0, 10);
+  context.bezierCurveTo(-22, -6, -14, -24, 0, -12);
+  context.bezierCurveTo(14, -24, 22, -6, 0, 10);
+  context.fill();
+  context.restore();
+}
+
+function filterActiveHeartBursts(heartBursts: HeartBurst[], now: number) {
+  return heartBursts.filter((burst) => now - burst.startedAt < HEART_BURST_DURATION_MS);
+}
+
+function drawHeartBursts(
+  context: CanvasRenderingContext2D,
+  heartBursts: HeartBurst[],
+  canvasWidth: number,
+  canvasHeight: number,
+  now: number,
+  mirrorX = false,
+) {
+  heartBursts.forEach((burst) => {
+    HEART_PARTICLES.forEach((particle) => {
+      const elapsed = now - burst.startedAt - particle.delay;
+
+      if (elapsed < 0) {
+        return;
+      }
+
+      const progress = Math.min(elapsed / (HEART_BURST_DURATION_MS - particle.delay), 1);
+      const easeOut = 1 - Math.pow(1 - progress, 3);
+      const alpha = progress < 0.18 ? progress / 0.18 : 1 - Math.max(progress - 0.72, 0) / 0.28;
+      const burstX = mirrorX ? 1 - burst.x : burst.x;
+      const x = burstX * canvasWidth + particle.x * easeOut;
+      const y = burst.y * canvasHeight + particle.y * easeOut;
+      const size = particle.size * (0.45 + easeOut * 0.75);
+
+      drawHeart(context, x, y, size, particle.rotate + easeOut * 28, Math.max(alpha, 0));
+    });
   });
-}
-
-function isPeaceSign(hand: Landmark[]) {
-  return Boolean(
-    hand[8]?.y < hand[6]?.y &&
-      hand[12]?.y < hand[10]?.y &&
-      hand[16]?.y > hand[14]?.y &&
-      hand[20]?.y > hand[18]?.y,
-  );
-}
-
-function isFist(hand: Landmark[]) {
-  return Boolean(
-    hand[8]?.y > hand[6]?.y &&
-      hand[12]?.y > hand[10]?.y &&
-      hand[16]?.y > hand[14]?.y &&
-      hand[20]?.y > hand[18]?.y,
-  );
 }
 
 export default function Camera({ onCapture }: CameraProps) {
@@ -151,6 +183,8 @@ export default function Camera({ onCapture }: CameraProps) {
   const captureTriggeredRef = useRef(false);
   const vTriggerPendingRef = useRef(false);
   const vTriggerTimeoutRef = useRef<number | null>(null);
+  const lastHeartBurstAtRef = useRef(0);
+  const heartBurstsRef = useRef<HeartBurst[]>([]);
   const dragCenterOffsetRef = useRef({ x: 0, y: 0 });
   const isDraggingRef = useRef(false);
   const activePointerIdRef = useRef<number | null>(null);
@@ -182,6 +216,23 @@ export default function Camera({ onCapture }: CameraProps) {
 
     setActiveStickerId(id);
     activeStickerIdRef.current = id;
+  }, []);
+
+  const showHeartBurst = useCallback((hand: Landmark[]) => {
+    const thumbTip = hand[4];
+    const indexTip = hand[8];
+
+    if (!thumbTip || !indexTip) {
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    const startedAt = Date.now();
+    const x = (thumbTip.x + indexTip.x) / 2;
+    const y = Math.min((thumbTip.y + indexTip.y) / 2 + 0.08, 0.82);
+
+    heartBurstsRef.current = [...heartBurstsRef.current, { id, x, y, startedAt }];
+    lastHeartBurstAtRef.current = startedAt;
   }, []);
 
   const updateStickerPosition = useCallback((clientX: number, clientY: number) => {
@@ -298,6 +349,10 @@ export default function Camera({ onCapture }: CameraProps) {
         }
       }
 
+      const now = Date.now();
+      heartBurstsRef.current = filterActiveHeartBursts(heartBurstsRef.current, now);
+      drawHeartBursts(context, heartBurstsRef.current, canvas.width, canvas.height, now, true);
+
       hasCapturedRef.current = true;
       onCapture(canvas.toDataURL("image/jpeg", 0.85));
     };
@@ -400,10 +455,11 @@ export default function Camera({ onCapture }: CameraProps) {
 
   useEffect(() => {
     let active = true;
-    let hands: HandsInstance | null = null;
-    let camera: CameraUtilsInstance | null = null;
+    let gestureRecognizer: GestureRecognizer | null = null;
+    let stream: MediaStream | null = null;
+    let animationFrameId: number | null = null;
 
-    const drawHands = (results: HandsResults) => {
+    const drawHands = (results: GestureRecognizerResult) => {
       const canvas = canvasRef.current;
       const video = videoRef.current;
 
@@ -423,33 +479,41 @@ export default function Camera({ onCapture }: CameraProps) {
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.fillStyle = "rgba(255, 255, 255, 0.9)";
 
-      results.multiHandLandmarks?.forEach((hand) => {
+      results.landmarks.forEach((hand) => {
         hand.forEach((point) => {
           context.beginPath();
           context.arc(point.x * canvas.width, point.y * canvas.height, 5, 0, Math.PI * 2);
           context.fill();
         });
       });
+
+      const now = Date.now();
+      heartBurstsRef.current = filterActiveHeartBursts(heartBurstsRef.current, now);
+      drawHeartBursts(context, heartBurstsRef.current, canvas.width, canvas.height, now);
     };
 
-    const handleResults = (results: HandsResults) => {
+    const handleResults = (results: GestureRecognizerResult) => {
       if (!active || hasCapturedRef.current) {
         return;
       }
 
-      const handsList = results.multiHandLandmarks ?? [];
       drawHands(results);
+      const iLoveYouHand = findHandByGesture(results, "ILoveYou");
+      const hasVictory = hasGesture(results, "Victory");
+      const hasClosedFist = hasGesture(results, "Closed_Fist");
+
+      if (iLoveYouHand && Date.now() - lastHeartBurstAtRef.current > HEART_BURST_INTERVAL_MS) {
+        showHeartBurst(iLoveYouHand);
+      }
 
       if (stateRef.current === "countdown") {
-        if (handsList.some(isFist)) {
+        if (hasClosedFist) {
           cancelCountdown();
         }
         return;
       }
 
-      const hasPeaceSign = handsList.some(isPeaceSign);
-
-      if (!hasPeaceSign) {
+      if (!hasVictory) {
         if (!vTriggerPendingRef.current) {
           setMessage("Show a V sign");
         }
@@ -472,37 +536,56 @@ export default function Camera({ onCapture }: CameraProps) {
 
     const setup = async () => {
       try {
-        await Promise.all([
-          loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"),
-          loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"),
-        ]);
+        const video = videoRef.current;
 
-        if (!active || !window.Hands || !window.Camera || !videoRef.current) {
+        if (!video) {
           return;
         }
 
-        hands = new window.Hands({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-        });
-        hands.setOptions({
-          maxNumHands: 2,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.7,
-          minTrackingConfidence: 0.7,
-        });
-        hands.onResults(handleResults);
-
-        camera = new window.Camera(videoRef.current, {
-          onFrame: async () => {
-            if (videoRef.current && hands) {
-              await hands.send({ image: videoRef.current });
-            }
+        const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_PATH);
+        gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: GESTURE_RECOGNIZER_MODEL,
           },
-          width: VIDEO_WIDTH,
-          height: VIDEO_HEIGHT,
+          runningMode: "VIDEO",
+          numHands: 2,
+          minHandDetectionConfidence: 0.7,
+          minHandPresenceConfidence: 0.7,
+          minTrackingConfidence: 0.7,
+          cannedGesturesClassifierOptions: {
+            scoreThreshold: GESTURE_SCORE_THRESHOLD,
+          },
         });
 
-        await camera.start();
+        if (!active) {
+          gestureRecognizer.close();
+          return;
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: VIDEO_WIDTH,
+            height: VIDEO_HEIGHT,
+          },
+          audio: false,
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        const recognizeFrame = () => {
+          if (!active || !gestureRecognizer || !videoRef.current) {
+            return;
+          }
+
+          if (videoRef.current.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            handleResults(recognizeGestureForVideo(gestureRecognizer, videoRef.current));
+          }
+
+          animationFrameId = window.requestAnimationFrame(recognizeFrame);
+        };
+
+        recognizeFrame();
       } catch {
         if (active) {
           setError("Camera permission is required. Please allow it in browser settings.");
@@ -518,10 +601,15 @@ export default function Camera({ onCapture }: CameraProps) {
         window.clearTimeout(vTriggerTimeoutRef.current);
         vTriggerTimeoutRef.current = null;
       }
-      camera?.stop?.();
-      hands?.close?.();
+      if (animationFrameId) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      stream?.getTracks().forEach((track) => {
+        track.stop();
+      });
+      gestureRecognizer?.close();
     };
-  }, [cancelCountdown, startCountdown]);
+  }, [cancelCountdown, showHeartBurst, startCountdown]);
 
   return (
     <div className="flex w-full max-w-5xl flex-col gap-4">
